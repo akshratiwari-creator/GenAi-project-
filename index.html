@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meeting Notes</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f5f3ed;color:#202b27;font:16px/1.55 system-ui,sans-serif}main{max-width:1050px;margin:auto;padding:48px 24px}header{border-bottom:2px solid #243f35;padding-bottom:22px;margin-bottom:28px}h1{font:clamp(42px,8vw,76px)/1 Georgia,serif;margin:8px 0}small{letter-spacing:.15em;text-transform:uppercase;color:#426255}.grid{display:grid;grid-template-columns:1fr 1fr;gap:32px}section{min-width:0}h2{font:26px Georgia,serif;margin:0 0 12px}textarea{width:100%;min-height:320px;resize:vertical;padding:14px;background:#fffdf8;border:1px solid #85938a;border-radius:4px;font:inherit}button,.upload{display:inline-block;font:inherit;padding:8px 13px;border-radius:4px;border:1px solid #315347;background:transparent;color:#243f35;cursor:pointer}button.primary{background:#243f35;color:white}button:disabled{opacity:.55;cursor:wait}.tools{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}#notes{background:#fffdf8;border-top:4px solid #315347;padding:18px;white-space:pre-wrap;overflow-wrap:anywhere}#notes h3{margin:0;font-size:15px}#notes p,#notes ul{margin:4px 0 16px}#status{min-height:1.6em}button:focus-visible,.upload:focus-within,textarea:focus-visible{outline:3px solid #af7528;outline-offset:2px}@media(max-width:720px){.grid{grid-template-columns:1fr}main{padding-top:26px}}
+</style>
+<main>
+<header><small>Meeting workspace</small><h1>Meeting Notes</h1><p>Turn a transcript into a clear record of what happened and who does what next.</p></header>
+<div class="grid">
+<section><h2><label for="transcript">Transcript</label></h2>
+<textarea id="transcript" maxlength="60000" placeholder="Paste your meeting transcript here"></textarea>
+<div class="tools"><button class="primary" id="run">Generate notes</button><label class="upload">Open text file <input type="file" id="file" accept=".txt,.md,text/plain"></label><button id="sample">Try sample</button></div>
+<small id="count"></small><p id="status" role="status"></p>
+<p>Generating notes sends the transcript to OpenAI.</p>
+</section>
+<section><h2>Meeting record</h2><div id="notes">Your summary, decisions, actions, deadlines, and email will appear here.</div><div class="tools" id="exports" hidden><button id="download" hidden>Download notes</button><button id="copy" hidden>Copy email</button></div></section>
+</div></main>
+<script>
+const byId = id => document.getElementById(id);
+const input = byId('transcript');
+const status = byId('status');
+const run = byId('run');
+const fields = Object.entries({summary:'Summary',decisions:'Decisions',actions:'Action items',deadlines:'Deadlines',email:'Follow-up email'});
+let record;
+function count(){byId('count').textContent = input.value.length.toLocaleString() + ' / 60,000 characters';}
+function show(data){
+  record = data;
+  const notes = byId('notes');
+  notes.replaceChildren();
+  for(const [key,label] of fields){
+    const title = document.createElement('h3');
+    title.textContent = label;
+    notes.append(title);
+    if(Array.isArray(data[key]) && data[key].length){
+      const list = document.createElement('ul');
+      for(const item of data[key]){
+        const entry = document.createElement('li');
+        entry.textContent = item;
+        list.append(entry);
+      }
+      notes.append(list);
+    } else {
+      const paragraph = document.createElement('p');
+      paragraph.textContent = typeof data[key] === 'string' ? data[key] : 'None recorded.';
+      notes.append(paragraph);
+    }
+  }
+  for(const id of ['exports','download','copy']) byId(id).hidden = false;
+}
+input.addEventListener('input', count);
+count();
+byId('file').addEventListener('change', async event => {
+  const file = event.target.files[0];
+  if(!file) return;
+  try{
+    const contents = await file.text();
+    if(contents.length > 60000) throw new Error('Choose a file with at most 60,000 characters.');
+    input.value = contents;
+    count();
+    status.textContent = 'Text file loaded.';
+  }catch(error){status.textContent = error.message;}
+  finally{event.target.value = '';}
+});
+byId('sample').onclick = () => {
+  input.value = 'Maya: We agreed to launch the pilot with five customers. Leo, can you send invitations by Friday?\nLeo: Yes, I will send them by Friday.\nMaya: I will review feedback next Tuesday.';
+  count();
+  show({summary:'The team agreed on a five-customer pilot and assigned invitations and feedback review.',
+        decisions:['Launch the pilot with five customers.'],
+        actions:['Leo will send invitations by Friday.','Maya will review feedback next Tuesday.'],
+        deadlines:['Friday — send invitations.','Next Tuesday — review feedback.'],
+        email:'Subject: Pilot kickoff and next steps\n\nHi team,\n\nWe agreed to launch the pilot with five customers. Leo will send invitations by Friday, and Maya will review feedback next Tuesday.\n\nThanks!'});
+  status.textContent = 'Showing prepared sample notes.';
+};
+run.onclick = async () => {
+  if(!input.value.trim()){status.textContent = 'Add a transcript first.'; input.focus(); return;}
+  run.disabled = byId('sample').disabled = true;
+  status.textContent = 'Generating notes…';
+  try{
+    const response = await fetch('/summarize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript:input.value})});
+    const data = await response.json();
+    if(!response.ok) throw new Error(data.error);
+    show(data);
+    status.textContent = 'Notes ready.';
+  }catch(error){status.textContent = error.message;}
+  finally{run.disabled = byId('sample').disabled = false;}
+};
+byId('download').onclick = () => {
+  const markdown = fields.map(([key,label]) => '## '+label+'\n\n'+(Array.isArray(record[key]) ? record[key].map(item=>'- '+item).join('\n') || 'None recorded.' : record[key])).join('\n\n');
+  const url = URL.createObjectURL(new Blob([markdown],{type:'text/markdown;charset=utf-8'}));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'meeting-notes.md';
+  link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+byId('copy').onclick = async () => {
+  try{await navigator.clipboard.writeText(record.email); status.textContent = 'Email copied.';}
+  catch{status.textContent = 'Clipboard unavailable. Select and copy the email text.';}
+};
+</script>
